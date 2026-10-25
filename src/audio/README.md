@@ -7,7 +7,7 @@ oscillators, noise buffers, filters and envelopes.
 | --- | --- |
 | `index.ts` | Public API: `getAudio()` singleton, `SfxName`, `AudioState` |
 | `audioSystem.ts` | Context + bus graph (sfx / ambient / music → master → compressor), unlock, mute (M), prefs, bus wiring |
-| `sfx.ts` | One-shots: click, hover, toggle, build, zone, park, bulldoze, error, coin, milestone, save (rate limited) |
+| `sfx.ts` | One-shots: click, hover, toggle, build, zone, park, civic, bulldoze, error, coin, milestone, save (rate limited) |
 | `ambience.ts` | City hum + traffic whooshes that grow with population; wind + birds that fade as the city grows |
 | `music.ts` | Seeded generative music (per city): pad → bass → arp → hats → kick as population grows; minor when happiness is low |
 | `synth.ts` | Shared helpers (noise buffers, envelopes, tone / noise voices) |
@@ -28,7 +28,7 @@ That's all. No per-frame `update()` is needed (audio runs on its own 25 ms looka
 
 | Event | Sound |
 | --- | --- |
-| `action:applied` ok | build (road) / zone / park / bulldoze, scaled a little by tiles applied |
+| `action:applied` ok | build (road) / zone / park / civic / bulldoze, scaled a little by tiles applied |
 | `action:applied` !ok | error |
 | `sim:month` net > 0 | coin |
 | `notify` success | milestone |

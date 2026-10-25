@@ -397,6 +397,8 @@ function actionSfx(action: ToolAction): SfxName {
       return 'zone';
     case 'park':
       return 'park';
+    case 'civic':
+      return 'civic';
     case 'bulldoze':
       return 'bulldoze';
   }

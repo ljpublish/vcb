@@ -11,6 +11,7 @@ export type SfxName =
   | 'build'
   | 'zone'
   | 'park'
+  | 'civic'
   | 'bulldoze'
   | 'error'
   | 'coin'
@@ -18,7 +19,7 @@ export type SfxName =
   | 'save';
 
 export const SFX_NAMES: readonly SfxName[] = [
-  'click', 'hover', 'toggle', 'build', 'zone', 'park', 'bulldoze', 'error', 'coin', 'milestone', 'save',
+  'click', 'hover', 'toggle', 'build', 'zone', 'park', 'civic', 'bulldoze', 'error', 'coin', 'milestone', 'save',
 ];
 
 /** Minimum seconds between two plays of the same sound (drag-spam / event bursts guard). */
@@ -29,6 +30,7 @@ const MIN_GAP: Record<SfxName, number> = {
   build: 0.06,
   zone: 0.06,
   park: 0.06,
+  civic: 0.3,
   bulldoze: 0.08,
   error: 0.25,
   coin: 0.3,
@@ -67,6 +69,14 @@ const RECIPES: Record<SfxName, Recipe> = {
     // Soft rustle + a birdy blip.
     noiseBurst(ctx, out, t, { color: 'pink', filter: 'bandpass', freq: 3000, q: 0.6, peak: 0.12, attack: 0.03, decay: 0.25 });
     tone(ctx, out, t + 0.08, { type: 'sine', freq: 2600, toFreq: 3400, glide: 0.06, peak: 0.07, decay: 0.08 });
+  },
+  civic(ctx, out, t) {
+    // Civic building placed: foundation thump + a warm two-bell ding (inharmonic partials).
+    tone(ctx, out, t, { type: 'sine', freq: 110, toFreq: 55, glide: 0.15, peak: 0.45, decay: 0.2 });
+    for (const [f, d] of [[659.25, 0], [987.77, 0.11]] as const) {
+      tone(ctx, out, t + d, { type: 'sine', freq: f, peak: 0.13, decay: 0.9 });
+      tone(ctx, out, t + d, { type: 'sine', freq: f * 2.76, peak: 0.03, decay: 0.4 });
+    }
   },
   bulldoze(ctx, out, t, size) {
     // Crunch: low rumble + debris crackle.
