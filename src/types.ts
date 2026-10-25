@@ -496,7 +496,11 @@ export type ToolAction =
 export interface ActionPreview {
   /** Total $ the action would cost (only valid tiles counted). */
   cost: number;
-  /** Per input tile (same order/length as action.tiles): would this tile be changed? */
+  /**
+   * Per input tile (same order/length as action.tiles): would this tile be changed?
+   * For a 'civic' action: one flag per footprint tile, row-major from the origin
+   * (index = dz * size + dx, size = CIVIC_SPECS[kind].size).
+   */
   valid: boolean[];
   validCount: number;
   /** cost <= money. */

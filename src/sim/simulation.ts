@@ -52,6 +52,9 @@ import {
   type TaxRates,
   type TileInfo,
   type ToolAction,
+  CIVIC_SPECS,
+  type CivicBuilding,
+  type ServiceCoverage,
 } from '../types';
 import { inMap, tileIndex } from '../core/coords';
 import { emptyStats } from './stats';
@@ -110,6 +113,7 @@ export class Simulation implements ISimulation {
       tileZone: new Uint8Array(TILE_COUNT),
       tileFlags: new Uint8Array(TILE_COUNT),
       buildings: [],
+      civics: [],
       history: [],
       extra: {},
     };
@@ -157,7 +161,7 @@ export class Simulation implements ISimulation {
   previewAction(action: ToolAction): ActionPreview {
     return {
       cost: 0,
-      valid: action.tiles.map(() => false),
+      valid: new Array<boolean>(action.type === 'civic' ? CIVIC_SPECS[action.kind].size ** 2 : action.tiles.length).fill(false),
       validCount: 0,
       affordable: true,
       reason: 'Simulation not implemented',
@@ -200,6 +204,18 @@ export class Simulation implements ISimulation {
     // TODO(simulation)
   }
 
+  getCivicAt(tx: number, tz: number): Readonly<CivicBuilding> | undefined {
+    return undefined;
+  }
+
+  forEachCivic(cb: (c: Readonly<CivicBuilding>) => void): void {
+    // TODO(simulation)
+  }
+
+  getCoverage(tx: number, tz: number): ServiceCoverage {
+    return { police: 0, fire: 0, education: 0, health: 0 };
+  }
+
   getRoadMask(tx: number, tz: number): number {
     return 0;
   }
@@ -236,6 +252,8 @@ export class Simulation implements ISimulation {
       landValue: 0,
       pollution: 0,
       building: null,
+      civic: null,
+      coverage: this.getCoverage(tx, tz),
     };
   }
 
