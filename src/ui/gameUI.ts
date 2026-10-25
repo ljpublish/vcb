@@ -162,10 +162,10 @@ export class GameUI implements IGameUI {
     this.onboarding = this.buildOnboarding();
 
     const bottomLeft = h('div', 'vcb-bottom-left', null, [this.status, this.minimap.el]);
+    const topLeft = h('div', 'vcb-top-left', null, [this.debugEl, this.onboarding]);
     this.container.append(
       this.hud.el,
-      this.debugEl,
-      this.onboarding,
+      topLeft,
       this.inspect.el,
       this.toasts.el,
       bottomLeft,

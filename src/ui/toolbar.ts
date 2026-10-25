@@ -143,7 +143,9 @@ export class Toolbar {
     this.civicLabel = this.civicBtn.querySelector('.vcb-btn-label') as HTMLSpanElement;
     this.civicBtn.appendChild(h('span', 'vcb-key', { text: civicKey, 'aria-hidden': 'true' }));
     this.civicMenu = h('div', 'vcb-civic-menu vcb-panel', { role: 'menu', 'aria-label': 'Civic services' });
-    this.civicMenu.appendChild(h('div', 'vcb-civic-head', null, ['Civic services ', h('span', 'vcb-tip-key', { text: `${civicKey} cycles` })]));
+    this.civicMenu.appendChild(
+      h('div', 'vcb-civic-head', null, [h('span', '', { text: 'Civic services' }), h('span', 'vcb-civic-hint', null, [h('kbd', '', { text: civicKey }), ' cycles'])]),
+    );
     for (const kind of CIVIC_KINDS) {
       const d = CIVIC_SPECS[kind];
       const tool = `civic_${kind}` as CivicToolId;

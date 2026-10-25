@@ -605,12 +605,8 @@ kbd {
 /* ------------------------------------------------------------------ onboarding */
 
 .vcb-onboarding {
-  position: absolute;
-  top: 74px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 420px;
-  max-width: calc(100% - 2 * var(--vcb-gap));
+  width: 380px;
+  max-width: 100%;
   padding: 12px 14px;
   display: none;
   border-top: 3px solid var(--vcb-accent);
@@ -628,10 +624,17 @@ kbd {
 
 /* ------------------------------------------------------------------ debug */
 
-.vcb-debug {
+.vcb-top-left {
   position: absolute;
   top: 74px;
   left: var(--vcb-gap);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: calc(100% - 2 * var(--vcb-gap));
+}
+.vcb-debug {
   margin: 0;
   padding: 8px 10px;
   display: none;
@@ -687,12 +690,12 @@ kbd {
   .vcb-hud-sub { display: none; }
   .vcb-hud-money .vcb-hud-sub { display: inline; }
   .vcb-hud-city { max-width: 130px; }
+  .vcb-toolbar { left: auto; right: var(--vcb-gap); transform: none; max-width: calc(100% - 230px); }
 }
 @media (max-width: 960px) {
   .vcb-hud-sep { display: none; }
   .vcb-hud-saved { display: none; }
   .vcb-hud { gap: 8px; padding: 0 6px 0 10px; }
-  .vcb-hud-stat .vcb-ico { display: none; }
   .vcb-help-cols { grid-template-columns: 1fr 1fr; }
   .vcb-minimap { --vcb-mm-size: 128px !important; }
   .vcb-ov-label { display: none; }
@@ -720,7 +723,8 @@ kbd {
   z-index: 6;
 }
 .vcb-civic-menu.vcb-open { display: flex; animation: vcb-fade-in 0.12s ease-out; }
-.vcb-civic-head { padding: 4px 8px 6px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--vcb-text-dim); }
+.vcb-civic-head { display: flex; justify-content: space-between; align-items: center; padding: 4px 8px 6px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--vcb-text-dim); }
+.vcb-civic-hint { text-transform: none; letter-spacing: 0; font-weight: 500; }
 .vcb-civic-item { height: auto; padding: 7px 8px; background: transparent; justify-content: flex-start; text-align: left; white-space: normal; }
 .vcb-civic-item .vcb-ico { color: #e6dcc8; }
 .vcb-civic-item.vcb-active .vcb-ico { color: var(--vcb-accent); }
