@@ -2,8 +2,6 @@
  * MODULE: buildings — procedural building generator entry point (module-internal API; may change).
  * Owner: buildings agent.
  *
- * STUB: returns an empty stamp.
- *
  * Contract inside the module:
  *  - Deterministic: the same BuildingSpec always yields identical voxels (seed an Rng from
  *    spec.variant via src/core/rng.ts; never Math.random()).
@@ -26,11 +24,18 @@
  *  - state Abandoned: same silhouette but WINDOW_LIT → GLASS_DARK/BOARDED, some walls → BOARDED,
  *    RUBBLE patches in the yard, no emitters, no signs lit (swap SIGN_* → BOARDED).
  */
+import { Rng, mixSeed } from '../core/rng';
+import { B } from '../voxel/blocks';
+import { applyAbandoned, generateConstruction } from './construction';
+import { generateCommercial } from './commercial';
+import { generateIndustrial } from './industrial';
+import { generateResidential } from './residential';
+import { StampBuilder, rotatePoint } from './stamp';
 import {
+  BuildingState,
   TILE_SIZE,
   type BuildingLevel,
   type BuildingSize,
-  type BuildingState,
   type Dir,
   type EmitterKind,
   type RCIZone,
@@ -63,9 +68,49 @@ export interface GeneratedStructure {
   emitters: LocalEmitter[];
 }
 
-/** Generate a building stamp. `groundHeight` = terrain.getTileHeight of the footprint. */
+/** Rng seed salt so building looks don't correlate with other uses of the variant. */
+const VARIANT_SALT = 0x5eed_b11d;
+
+/**
+ * Generate a building stamp. `groundHeight` = terrain.getTileHeight of the footprint.
+ * Pipeline: zone generator (authored facing +Z, Active look) → construction / abandoned transform
+ * → rotate to spec.facing → trim. Never throws: a failing generator yields a plain FOUNDATION slab.
+ */
 export function generateBuilding(spec: BuildingSpec, groundHeight: number): GeneratedStructure {
-  // TODO(buildings): dispatch to residential.ts / commercial.ts / industrial.ts / construction.ts
-  const s = spec.size * TILE_SIZE;
-  return { stamp: { sx: s, sy: 1, sz: s, data: new Uint8Array(s * s).fill(255) }, originY: groundHeight - 1, emitters: [] };
+  const S = spec.size * TILE_SIZE;
+  const emitters: LocalEmitter[] = [];
+  let b: StampBuilder;
+  try {
+    const rng = new Rng(mixSeed(spec.variant >>> 0, VARIANT_SALT));
+    if (spec.zone === 1) b = generateResidential(spec, rng, emitters);
+    else if (spec.zone === 2) b = generateCommercial(spec, rng, emitters);
+    else b = generateIndustrial(spec, rng, emitters);
+    if (b.sx !== S || b.sz !== S) throw new Error(`generator returned ${b.sx}×${b.sz}, expected ${S}×${S}`);
+    if (spec.state === BuildingState.Constructing) {
+      b = generateConstruction(spec, b, new Rng(mixSeed(spec.variant >>> 0, 0xc0de)));
+      emitters.length = 0;
+    } else if (spec.state === BuildingState.Abandoned) {
+      applyAbandoned(b, new Rng(mixSeed(spec.variant >>> 0, 0xdead)));
+      emitters.length = 0;
+    }
+  } catch (err) {
+    reportGenError(err);
+    b = new StampBuilder(S, 2, S);
+    b.fill(0, 0, 0, S, 1, S, B.FOUNDATION);
+    emitters.length = 0;
+  }
+  const rotated = b.rotateY(spec.facing);
+  const stamp = rotated.toStamp();
+  for (const e of emitters) {
+    const [x, z] = rotatePoint(e.x, e.z, S, spec.facing);
+    e.x = Math.max(0, Math.min(S, x));
+    e.z = Math.max(0, Math.min(S, z));
+    e.y = Math.max(0, Math.min(stamp.sy + 2, e.y));
+  }
+  return { stamp, originY: groundHeight - 1, emitters };
+}
+
+let genErrors = 0;
+function reportGenError(err: unknown): void {
+  if (genErrors++ < 5) console.warn('[buildings] generator failed', err);
 }
