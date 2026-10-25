@@ -14,12 +14,12 @@
  *             non-dragged footprint tiles stay Zoned (empty lots). Empty tiles without decor: invalid.
  *  Rejected entirely when cost > money. Max MAX_ACTION_TILES tiles. Duplicate tiles count once.
  */
-import type { ActionPreview, ActionResult, TerrainReader, ToolAction } from '../types';
+import { CIVIC_SPECS, type ActionPreview, type ActionResult, type TerrainReader, type ToolAction } from '../types';
 import type { CityState } from './cityState';
 
 export function previewAction(state: CityState, terrain: TerrainReader, action: ToolAction): ActionPreview {
   // TODO(simulation)
-  return { cost: 0, valid: action.tiles.map(() => false), validCount: 0, affordable: true };
+  return { cost: 0, valid: new Array<boolean>(action.type === 'civic' ? CIVIC_SPECS[action.kind].size ** 2 : action.tiles.length).fill(false), validCount: 0, affordable: true };
 }
 
 export function applyAction(state: CityState, terrain: TerrainReader, action: ToolAction, changed: Set<number>): ActionResult {
