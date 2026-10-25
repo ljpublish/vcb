@@ -19,6 +19,7 @@ import {
   TileKind,
   type Building,
   type CityReader,
+  type CivicBuilding,
   type Emitter,
   type IStructureSync,
   type ITerrain,
@@ -27,6 +28,7 @@ import {
   type StructureSyncDeps,
 } from '../types';
 import { generateBuilding, type GeneratedStructure } from './buildingGen';
+import { CIVIC_SIZE, generateCivic } from './civic';
 import { generatePark, generateZoneLot } from './lotGen';
 import { generateRoad } from './roadGen';
 
@@ -177,6 +179,12 @@ export class StructureSync implements IStructureSync {
         this.processBuilding(b);
         return;
       }
+    } else if (kind === TileKind.Civic) {
+      const c = city.getCivicAt(tx, tz);
+      if (c) {
+        this.processCivic(c);
+        return;
+      }
     }
     const water = this.terrain.isWater(tx, tz);
     let key: string;
@@ -224,9 +232,24 @@ export class StructureSync implements IStructureSync {
   }
 
   private processBuilding(b: Readonly<Building>): void {
-    const n = this.n;
     const key = `B:${b.id}:${b.level}:${b.size}:${b.facing}:${b.variant}:${b.state}:${b.stage}`;
     const size = b.size === 2 ? 2 : 1;
+    this.stampFootprint(b.id, b.tx, b.tz, size, key, (h) => generateBuilding(
+      { zone: b.zone, level: b.level, size, facing: b.facing, variant: b.variant, state: b.state, stage: b.stage },
+      h,
+    ));
+  }
+
+  private processCivic(c: Readonly<CivicBuilding>): void {
+    const size = CIVIC_SIZE[c.kind] === 2 ? 2 : 1;
+    const key = `C:${c.id}:${c.kind}:${c.facing}:${c.variant}`;
+    this.stampFootprint(c.id, c.tx, c.tz, size, key, (h) => generateCivic({ kind: c.kind, facing: c.facing, variant: c.variant }, h));
+  }
+
+  /** Restore + stamp a multi-tile footprint once, keyed on all its tiles. */
+  private stampFootprint(id: number, btx: number, btz: number, size: number, key: string, make: (h: number) => GeneratedStructure): void {
+    const n = this.n;
+    const b = { id, tx: btx, tz: btz };
     let same = true;
     for (let dz = 0; dz < size; dz++) {
       for (let dx = 0; dx < size; dx++) {
@@ -247,11 +270,7 @@ export class StructureSync implements IStructureSync {
         this.tileBuilding[i] = b.id;
       }
     }
-    const h = this.terrain.getTileHeight(b.tx, b.tz);
-    const gen = generateBuilding(
-      { zone: b.zone, level: b.level, size, facing: b.facing, variant: b.variant, state: b.state, stage: b.stage },
-      h,
-    );
+    const gen = make(this.terrain.getTileHeight(b.tx, b.tz));
     const ox = b.tx * TILE_SIZE, oz = b.tz * TILE_SIZE;
     this.world.applyStamp(gen.stamp, ox, gen.originY, oz);
     const had = this.buildingEmitters.delete(b.id);
@@ -266,17 +285,11 @@ export class StructureSync implements IStructureSync {
     const prev = this.tileBuilding[i];
     if (prev) {
       this.tileBuilding[i] = 0;
-      const still = this.city.getBuilding(prev);
-      if (!still || this.covers(still, i) === false) {
-        if (this.buildingEmitters.delete(prev)) this.markEmitters();
-      }
+      const tx = i % this.n, tz = (i / this.n) | 0;
+      const now = this.city.getBuildingIdAt(tx, tz) || (this.city.getCivicAt(tx, tz)?.id ?? 0);
+      if (now !== prev && this.buildingEmitters.delete(prev)) this.markEmitters();
     }
     if (this.parkEmitters.delete(i)) this.markEmitters();
-  }
-
-  private covers(b: Readonly<Building>, i: number): boolean {
-    const tx = i % this.n, tz = (i / this.n) | 0;
-    return tx >= b.tx && tz >= b.tz && tx < b.tx + b.size && tz < b.tz + b.size && this.city.getBuildingIdAt(tx, tz) === b.id;
   }
 
   private zoneEdgeMask(tx: number, tz: number): number {

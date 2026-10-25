@@ -4,19 +4,17 @@
  * `variant`, authored with the front facing +Z (the sidewalk edge is z = S-1), layer y = 0 is the
  * ground surface layer, structure from y = 1, never writes outside the footprint.
  *
- * NOT YET WIRED: the frozen contract (src/types.ts) has no civic tile kind / tool / sim effect yet.
- * These generators are ready for structureSync once a Civic kind is added.
+ * Wired: structureSync stamps TileKind.Civic footprints via generateCivic (CityReader.getCivicAt).
  */
 import { Rng } from '../../core/rng';
 import { B, type BlockId } from '../../voxel/blocks';
-import { TILE_SIZE, type BuildingSize, type Dir } from '../../types';
+import { TILE_SIZE, type BuildingSize, type CivicKind, type Dir } from '../../types';
 import type { GeneratedStructure, LocalEmitter } from '../buildingGen';
 import { emit, ground } from '../parts';
 import { rotatePoint, StampBuilder } from '../stamp';
 import { flag, leafyTree as tree, windows } from './kit';
 
-export type CivicKind = 'town_hall' | 'police' | 'fire' | 'school' | 'hospital';
-export const CIVIC_KINDS: readonly CivicKind[] = ['town_hall', 'police', 'fire', 'school', 'hospital'];
+export { CIVIC_KINDS, type CivicKind } from '../../types';
 
 /** Footprint in tiles per civic kind. */
 export const CIVIC_SIZE: Readonly<Record<CivicKind, BuildingSize>> = {
