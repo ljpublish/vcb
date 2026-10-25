@@ -302,7 +302,9 @@ function storeys(
 
 /** Protruding balcony slab + railing on the front (+Z) face at layer y over x∈[xa,xb). */
 function balconyFront(b: StampBuilder, xa: number, xb: number, z: number, y: number): void {
+  // discrete 2-wide balconies with 1-voxel gaps so the windows between them stay visible
   for (let x = xa; x < xb; x++) {
+    if ((x - xa) % 3 === 2) continue;
     b.set(x, y, z, B.BALCONY);
     b.set(x, y + 1, z, B.RAILING);
   }
