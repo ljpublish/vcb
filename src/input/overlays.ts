@@ -180,6 +180,11 @@ export function approxBuildingHeight(level: number, size: number): number {
   return level >= 3 ? 44 : level === 2 ? 26 : 12;
 }
 
+/** Approximate civic building height (voxels above ground). */
+export function approxCivicHeight(size: number): number {
+  return size >= 2 ? 30 : 20;
+}
+
 export interface FootprintBox {
   x0: number;
   z0: number;

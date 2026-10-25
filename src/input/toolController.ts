@@ -17,6 +17,8 @@
  *      park     : drag rectangle → { type:'park', tiles }.
  *      bulldoze : drag rectangle → { type:'bulldoze', tiles }; every building touched is marked
  *                 with a translucent box of approximate height.
+ *      civic_*  : no drag; a ghost of the whole footprint (CIVIC_SPECS[kind].size) at the hovered
+ *                 min corner; click → { type:'civic', kind, origin }.
  *    Tile lists are clamped to MAX_ACTION_TILES (truncated + one 'notify' warning per drag).
  *    Drags that leave the map clamp to the map edge.
  *  - Preview while dragging (and single-tile hover preview when not dragging): sim.previewAction()
@@ -35,12 +37,14 @@
 import type * as THREE from 'three';
 import {
   BRIDGE_DECK_HEIGHT,
+  CIVIC_SPECS,
   KEYMAP,
   MAP_TILES,
   MAX_ACTION_TILES,
   TILE_SIZE,
   TOOL_IDS,
   TileKind,
+  civicKindOfTool,
   type ActionPreview,
   type IToolController,
   type OverlayMode,
@@ -52,7 +56,7 @@ import {
 } from '../types';
 import { lPathTiles, rectTiles, straightPathTiles } from '../core/coords';
 import { errorMessage, isEditableTarget, keyMatches } from '../core/util';
-import { DataOverlay, GridOverlay, TileHighlighter, approxBuildingHeight, type FootprintBox } from './overlays';
+import { DataOverlay, GridOverlay, TileHighlighter, approxBuildingHeight, approxCivicHeight, type FootprintBox } from './overlays';
 import { pickPlane, pickTile, type TileHeightFn } from './picking';
 import { buttonBit, getInputShared, type InputShared } from './shared';
 
@@ -64,6 +68,11 @@ const TOOL_COLORS: Record<ToolId, number> = {
   zone_i: 0xffc21a,
   park: 0x2fbf71,
   bulldoze: 0xff4d4d,
+  civic_town_hall: 0xb98cff,
+  civic_police: 0xb98cff,
+  civic_fire: 0xb98cff,
+  civic_school: 0xb98cff,
+  civic_hospital: 0xb98cff,
 };
 const INVALID_COLOR = 0x8a1c1c;
 const UNAFFORDABLE_COLOR = 0xff3b3b;
@@ -97,7 +106,7 @@ export class ToolController implements IToolController {
   private readonly data: DataOverlay;
 
   private drag: DragState | null = null;
-  /** Select tool: a left press waiting for its release. */
+  /** Select / civic tools: a left press waiting for its release. */
   private selectPress: { pointerId: number; x: number; y: number } | null = null;
   private hoverTx = -1;
   private hoverTz = -1;
@@ -331,7 +340,7 @@ export class ToolController implements IToolController {
       if (button !== 0 || !this._enabled || this.shared.cameraDragging || this.drag) return;
       this.clientX = e.clientX;
       this.clientY = e.clientY;
-      if (this._tool === 'select') {
+      if (this._tool === 'select' || civicKindOfTool(this._tool)) {
         this.selectPress = { pointerId: e.pointerId, x: e.clientX, y: e.clientY };
         return;
       }
@@ -369,10 +378,15 @@ export class ToolController implements IToolController {
     if (press && e.pointerId === press.pointerId) {
       this.selectPress = null;
       const moved = Math.hypot(e.clientX - press.x, e.clientY - press.y) > CLICK_SLOP_PX;
-      if (this.shared.suppressClick || moved || !this._enabled || this._tool !== 'select') {
+      if (this.shared.suppressClick || moved || !this._enabled) {
         this.shared.suppressClick = false;
         return;
       }
+      if (civicKindOfTool(this._tool)) {
+        this.placeCivic();
+        return;
+      }
+      if (this._tool !== 'select') return;
       const pick = pickTile(this.deps.camera, this.deps.dom, e.clientX, e.clientY, this.deps.terrain, this.heightAt);
       this.deps.bus.emit('inspect', { tile: pick ? { tx: pick.tx, tz: pick.tz } : null });
     }
@@ -479,8 +493,11 @@ export class ToolController implements IToolController {
           this.deps.bus.emit('notify', { kind: 'warning', message: `Area too large: limited to ${MAX_ACTION_TILES} tiles` });
         }
       }
-    } else if (this.hoverTx >= 0 && this.pointerInside) tiles = [{ tx: this.hoverTx, tz: this.hoverTz }];
-    else tiles = [];
+    } else if (this.hoverTx >= 0 && this.pointerInside) {
+      const kind = civicKindOfTool(this._tool);
+      const size = kind ? CIVIC_SPECS[kind].size : 1;
+      tiles = size > 1 ? rectTiles({ tx: this.hoverTx, tz: this.hoverTz }, { tx: this.hoverTx + size - 1, tz: this.hoverTz + size - 1 }) : [{ tx: this.hoverTx, tz: this.hoverTz }];
+    } else tiles = [];
 
     const key = drag
       ? `${this._tool}|${drag.start.tx},${drag.start.tz}|${drag.cur.tx},${drag.cur.tz}|${drag.shift ? 1 : 0}`
@@ -499,7 +516,34 @@ export class ToolController implements IToolController {
       case 'zone_i': return { type: 'zone', zone: 3, tiles };
       case 'park': return { type: 'park', tiles };
       case 'bulldoze': return { type: 'bulldoze', tiles };
-      default: return null;
+      default: {
+        const kind = civicKindOfTool(this._tool);
+        const o = tiles[0];
+        return kind && o ? { type: 'civic', kind, origin: { tx: o.tx, tz: o.tz } } : null;
+      }
+    }
+  }
+
+  /** Place the civic building whose ghost is under the cursor (click with a civic tool). */
+  private placeCivic(): void {
+    this.rebuildTiles(false);
+    const action = this.tiles.length > 0 ? this.makeAction(this.tiles) : null;
+    if (!action || action.type !== 'civic') return;
+    // A footprint clipped by the map edge can never be valid: say so instead of asking the sim.
+    if (this.tiles.length !== CIVIC_SPECS[action.kind].size ** 2) {
+      this.deps.bus.emit('notify', { kind: 'warning', message: 'Not enough room at the map edge' });
+      return;
+    }
+    this.apply(action);
+    this.rebuildTiles(true);
+  }
+
+  private apply(action: ToolAction): void {
+    try {
+      const result = this.deps.sim.applyAction(action);
+      if (result && !result.ok && result.reason) this.deps.bus.emit('notify', { kind: 'warning', message: result.reason });
+    } catch (err) {
+      this.deps.bus.emit('notify', { kind: 'error', message: `Action failed: ${errorMessage(err)}` });
     }
   }
 
@@ -531,8 +575,12 @@ export class ToolController implements IToolController {
     colors.length = n;
     dims.length = n;
     const toolColor = TOOL_COLORS[this._tool];
+    // A civic action has no tile list: accept a per-footprint-tile array or a single overall flag.
+    const whole = action.type === 'civic' && preview.valid.length !== n;
+    const clipped = action.type === 'civic' && n !== CIVIC_SPECS[action.kind].size ** 2;
+    if (clipped) this.hoverValid = false;
     for (let i = 0; i < n; i++) {
-      const ok = preview.valid[i] === true;
+      const ok = !clipped && (whole ? preview.validCount > 0 : preview.valid[i] === true);
       if (!preview.affordable) {
         colors[i] = ok ? UNAFFORDABLE_COLOR : INVALID_COLOR;
         dims[i] = !ok;
@@ -561,6 +609,21 @@ export class ToolController implements IToolController {
           x0: b.tx * TILE_SIZE, z0: b.tz * TILE_SIZE,
           x1: (b.tx + b.size) * TILE_SIZE, z1: (b.tz + b.size) * TILE_SIZE,
           y0, y1: y0 + approxBuildingHeight(b.level, b.size),
+        });
+      }
+      const seenCivic = new Set<number>();
+      for (let i = 0; i < n; i++) {
+        const t = tiles[i]!;
+        if (city.getTileKind(t.tx, t.tz) !== TileKind.Civic) continue;
+        const c = city.getCivicAt(t.tx, t.tz);
+        if (!c || seenCivic.has(c.id)) continue;
+        seenCivic.add(c.id);
+        const size = CIVIC_SPECS[c.kind]?.size ?? 1;
+        const y0 = this.deps.terrain.getTileHeight(c.tx, c.tz);
+        boxes.push({
+          x0: c.tx * TILE_SIZE, z0: c.tz * TILE_SIZE,
+          x1: (c.tx + size) * TILE_SIZE, z1: (c.tz + size) * TILE_SIZE,
+          y0, y1: y0 + approxCivicHeight(size),
         });
       }
     }
@@ -601,14 +664,7 @@ export class ToolController implements IToolController {
     this.rebuildTiles(false);
     const action = this.tiles.length > 0 ? this.makeAction(this.tiles.slice()) : null;
     this.endDrag();
-    if (action) {
-      try {
-        const result = this.deps.sim.applyAction(action);
-        if (result && !result.ok && result.reason) this.deps.bus.emit('notify', { kind: 'warning', message: result.reason });
-      } catch (err) {
-        this.deps.bus.emit('notify', { kind: 'error', message: `Action failed: ${errorMessage(err)}` });
-      }
-    }
+    if (action) this.apply(action);
     this.rebuildTiles(true);
   }
 
@@ -636,6 +692,13 @@ export class ToolController implements IToolController {
   private outlineTile(which: 'hover' | 'select', tx: number, tz: number, color?: number): void {
     const o = which === 'hover' ? this.highlighter.hoverOutline : this.highlighter.selectOutline;
     const city = this.deps.sim;
+    const civic = city.getTileKind(tx, tz) === TileKind.Civic ? city.getCivicAt(tx, tz) : undefined;
+    if (civic) {
+      const size = CIVIC_SPECS[civic.kind]?.size ?? 1;
+      const y0 = this.deps.terrain.getTileHeight(civic.tx, civic.tz);
+      o.set(civic.tx * TILE_SIZE, y0, civic.tz * TILE_SIZE, (civic.tx + size) * TILE_SIZE, y0 + approxCivicHeight(size), (civic.tz + size) * TILE_SIZE, color);
+      return;
+    }
     const b = city.getBuildingAt(tx, tz);
     if (b) {
       const y0 = this.deps.terrain.getTileHeight(b.tx, b.tz);
