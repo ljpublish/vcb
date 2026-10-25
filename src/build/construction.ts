@@ -73,12 +73,12 @@ export function generateConstruction(spec: BuildingSpec, finished: StampBuilder,
   const sx0 = Math.max(0, minX - 1), sx1 = Math.min(S - 1, maxX + 1);
   const sz0 = Math.max(0, minZ - 1), sz1 = Math.min(S - 1, maxZ + 1);
   for (let y = 2; y <= scaffoldTop; y++) {
-    const deck = (y - 2) % 4 === 3 || y === scaffoldTop;
+    const deck = (y - 2) % 6 === 5 || y === scaffoldTop;
     for (let z = sz0; z <= sz1; z++) {
       for (let x = sx0; x <= sx1; x++) {
         const edge = x === sx0 || x === sx1 || z === sz0 || z === sz1;
         if (!edge) continue;
-        const post = (x - sx0) % 3 === 0 && (z - sz0) % 3 === 0;
+        const post = (x - sx0) % 4 === 0 && (z - sz0) % 4 === 0;
         if (post || deck || ((x === sx0 || x === sx1) && (z === sz0 || z === sz1))) {
           if (out.get(x, y, z) === KEEP) out.set(x, y, z, B.SCAFFOLD);
         }
