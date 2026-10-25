@@ -16,6 +16,8 @@
  *     tileKind / tileZone / tileFlags : string  — base64 of a byte-RLE ([count, value] pairs, count 1..255)
  *     buildings : number[][]  — tuples [id, zone, level, tx, tz, size, facing, variant, state, stage,
  *                               stateDays, occupants, capacity, builtDay]
+ *     civics    : (number|string)[][] — tuples [id, kind, tx, tz, facing, variant, builtDay]
+ *                               (kind is the CivicKind string; missing → [] for pre-civic saves)
  *     history   : number[][]  — tuples [day, population, money, jobs, demandR, demandC, demandI]
  *     extra     : object      — verbatim
  * Population for meta = Σ occupants of residential buildings.
@@ -32,7 +34,11 @@ import {
   TAX_MAX,
   TAX_MIN,
   TILE_COUNT,
+  CIVIC_KINDS,
+  CIVIC_SPECS,
   type Building,
+  type CivicBuilding,
+  type CivicKind,
   type CameraState,
   type CitySnapshot,
   type HistorySample,
@@ -65,6 +71,8 @@ export const SAVE_FORMAT = 'vcb-save';
 
 /** Building tuple: [id, zone, level, tx, tz, size, facing, variant, state, stage, stateDays, occupants, capacity, builtDay]. */
 type BuildingTuple = [number, number, number, number, number, number, number, number, number, number, number, number, number, number];
+/** Civic tuple: [id, kind, tx, tz, facing, variant, builtDay]. */
+type CivicTuple = [number, CivicKind, number, number, number, number, number];
 /** History tuple: [day, population, money, jobs, demandR, demandC, demandI]. */
 type HistoryTuple = [number, number, number, number, number, number, number];
 
@@ -83,6 +91,7 @@ interface EncodedCityV1 {
   tileZone: string;
   tileFlags: string;
   buildings: BuildingTuple[];
+  civics: CivicTuple[];
   history: HistoryTuple[];
   extra: Record<string, unknown>;
 }
@@ -119,6 +128,7 @@ export function encodeSave(payload: SavePayload, savedAt: number = Date.now()): 
       b.id, b.zone, b.level, b.tx, b.tz, b.size, b.facing, b.variant,
       b.state, b.stage, b.stateDays, b.occupants, b.capacity, b.builtDay,
     ]),
+    civics: c.civics.map((v): CivicTuple => [v.id, v.kind, v.tx, v.tz, v.facing, v.variant, v.builtDay]),
     history: c.history.map((h): HistoryTuple => [
       h.day, h.population, h.money, h.jobs, h.demand.r, h.demand.c, h.demand.i,
     ]),
@@ -239,7 +249,7 @@ function decodeCity(raw: unknown): CitySnapshot {
   const rngState = uint32(raw.rngState, 'rngState');
   const nextBuildingId = intMin(raw.nextBuildingId, 1, 'nextBuildingId');
 
-  const tileKind = decodeTiles(raw.tileKind, 'tileKind', 3);
+  const tileKind = decodeTiles(raw.tileKind, 'tileKind', 4);
   const tileZone = decodeTiles(raw.tileZone, 'tileZone', 3);
   const tileFlags = decodeTiles(raw.tileFlags, 'tileFlags', 255);
 
@@ -252,6 +262,18 @@ function decodeCity(raw: unknown): CitySnapshot {
     if (b.id >= nextBuildingId) throw new SaveFormatError(`Building id ${b.id} ≥ nextBuildingId`);
     return b;
   });
+
+  let civics: CivicBuilding[] = [];
+  if (raw.civics !== undefined) {
+    if (!Array.isArray(raw.civics)) fail('civics');
+    civics = raw.civics.map((t: unknown, idx: number) => {
+      const v = decodeCivic(t, idx);
+      if (ids.has(v.id)) throw new SaveFormatError(`Duplicate building id ${v.id}`);
+      ids.add(v.id);
+      if (v.id >= nextBuildingId) throw new SaveFormatError(`Civic id ${v.id} ≥ nextBuildingId`);
+      return v;
+    });
+  }
 
   if (!Array.isArray(raw.history)) fail('history');
   const history: HistorySample[] = raw.history.map((t: unknown, idx: number) => {
@@ -269,7 +291,7 @@ function decodeCity(raw: unknown): CitySnapshot {
 
   return {
     version, mapTiles: MAP_TILES, seed, name, day, money, speed, taxRates, rngState, nextBuildingId,
-    tileKind, tileZone, tileFlags, buildings, history, extra,
+    tileKind, tileZone, tileFlags, buildings, civics, history, extra,
   };
 }
 
@@ -292,6 +314,22 @@ function decodeBuilding(t: unknown, idx: number): Building {
   const capacity = finiteMin0(t[12], `${f}.capacity`);
   const builtDay = finiteMin0(t[13], `${f}.builtDay`);
   return { id, zone, level, tx, tz, size, facing, variant, state, stage, stateDays, occupants, capacity, builtDay };
+}
+
+function decodeCivic(t: unknown, idx: number): CivicBuilding {
+  const f = `civics[${idx}]`;
+  if (!Array.isArray(t) || t.length !== 7) fail(`${f} (tuple length)`);
+  const id = intMin(t[0], 1, `${f}.id`);
+  const kind = t[1] as CivicKind;
+  if (typeof kind !== 'string' || !CIVIC_KINDS.includes(kind)) fail(`${f}.kind`);
+  const size = CIVIC_SPECS[kind].size;
+  const tx = intMin(t[2], 0, `${f}.tx`);
+  const tz = intMin(t[3], 0, `${f}.tz`);
+  if (tx + size > MAP_TILES || tz + size > MAP_TILES) throw new SaveFormatError(`${f} footprint outside the map`);
+  const facing = intRange(t[4], 0, 3, `${f}.facing`) as CivicBuilding['facing'];
+  const variant = uint32(t[5], `${f}.variant`);
+  const builtDay = finiteMin0(t[6], `${f}.builtDay`);
+  return { id, kind, tx, tz, facing, variant, builtDay };
 }
 
 function decodeTiles(raw: unknown, field: string, maxValue: number): Uint8Array {
