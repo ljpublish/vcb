@@ -12,6 +12,11 @@ export const TOOL_ICONS: Record<ToolId, string> = {
   zone_i: '',
   park: '',
   bulldoze: '',
+  civic_town_hall: '',
+  civic_police: '',
+  civic_fire: '',
+  civic_school: '',
+  civic_hospital: '',
 };
 
 export const UI_ICONS: Record<string, string> = {};
