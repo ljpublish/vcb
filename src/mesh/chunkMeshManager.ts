@@ -6,9 +6,11 @@
  *  - Worker pool: N = deps.workerCount ?? clamp((navigator.hardwareConcurrency || 4) - 1, 1, 4)
  *    workers via `new Worker(new URL('./mesher.worker.ts', import.meta.url), { type: 'module' })`.
  *    If the Worker API is missing, construction throws, workerCount is 0, or every worker has died
- *    (a worker 'error' event or two job timeouts mark it dead; its in-flight chunks are requeued),
- *    chunks are meshed synchronously on the main thread with greedyMesh() under a per-frame time
- *    budget (~4 ms; more while a bulk rebuild runs behind the loading overlay). Logged once.
+ *    (a worker 'error' event, a failed postMessage, or overdue jobs in two consecutive timeout
+ *    checks mark it dead; its in-flight chunks are requeued), chunks are meshed synchronously on
+ *    the main thread with greedyMesh() under a per-frame time budget (~4 ms; more while a bulk
+ *    rebuild runs behind the loading overlay). Logged once. Long gaps between update() calls
+ *    (hidden tab, sleep, blocked main thread) restart the job clocks, so they never cause timeouts.
  *  - update(camera, focus):
  *      1. world.takeDirtyChunks() → pending set (dense list + position index, no Set). Chunks that are
  *         empty (world.isChunkEmpty) lose their meshes immediately and never enter the queue.
@@ -19,10 +21,14 @@
  *         version, voxels } with the buffer transferred. Never two jobs per chunk: a chunk re-dirtied
  *         while in flight stays pending and is sent again after its result lands. Results refill
  *         the workers directly from the 'message' handler (no waiting for the next frame), using the
- *         priorities of the last update().
+ *         priorities of the last update(). Inside update(), a worker's second (prefetch) job is only
+ *         sent while the frame budget below lasts; an idle worker always gets one.
  *      4. Results wait in a FIFO (one slot per chunk; a newer result replaces an unapplied older
  *         one) and are applied in update() under an upload budget: ≤ 24 results / ~2 ms / ~4 MB per
- *         frame normally, much larger while a bulk rebuild (rebuildAll) or a big backlog is pending.
+ *         frame normally, ≤ 64 / ~5 ms / 16 MB while a large backlog (> 96 chunks) is pending, and
+ *         ≤ 256 / ~14 ms / 64 MB during a bulk rebuild (rebuildAll() until idle: the loading overlay).
+ *         The time budget counts from the start of update() (intake + dispatch included); at least
+ *         one result is applied per frame, so progress never stalls.
  *         Applying = buildChunkGeometry + swap into the chunk's Mesh (created on first use:
  *         name `chunk:${cx},${cy},${cz}`, position = chunk origin, matrixAutoUpdate = false,
  *         opaque casts + receives shadows, water only receives); old geometries are disposed, meshes
@@ -62,36 +68,49 @@ import type { ChunkMeshData, MeshBuffers, MeshRequest, WorkerResponse } from './
 const MAX_JOBS_PER_WORKER = 2;
 /** Upper bound for an explicit deps.workerCount. */
 const MAX_WORKERS = 8;
-/** A job without an answer for this long is considered lost (requeued; 2 losses kill the worker). */
+/**
+ * A job without an answer for this long is considered lost: it is requeued and its worker becomes
+ * suspect (gets no new jobs while a healthy worker is alive). Any answer clears the suspicion; a
+ * worker that also lets the jobs of a second check time out is terminated.
+ */
 const JOB_TIMEOUT_MS = 20_000;
 const TIMEOUT_CHECK_INTERVAL_MS = 1_000;
+const MAX_TIMEOUT_CHECKS = 2;
+/**
+ * A gap this long between two update() calls means the page was hidden, the machine slept or the
+ * main thread was blocked (e.g. city generation): the clocks of in-flight jobs restart instead of
+ * letting every one of them time out at once.
+ */
+const RESUME_GAP_MS = 2_000;
 const MAX_POOLED_BUFFERS = 16;
 /** Added to the squared distance of chunks outside the view frustum (> any in-world distance²). */
 const OUT_OF_VIEW_PENALTY = 1e7;
 /** Samples in the rolling average of meshing times. */
 const MS_WINDOW = 64;
 
-/** Normal per-frame upload budget. */
-const UPLOAD_MAX_RESULTS = 24;
-const UPLOAD_MAX_MS = 2;
-const UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
-/** Upload budget during a bulk rebuild (behind the loading overlay) or with a large backlog. */
-const BULK_MAX_RESULTS = 256;
-const BULK_MAX_MS = 12;
-const BULK_MAX_BYTES = 96 * 1024 * 1024;
-/** Backlog (pending + in flight + unapplied) above which the bulk budgets apply. */
-const BULK_BACKLOG = 96;
-/** Main-thread fallback meshing budget per frame. */
-const SYNC_MAX_MS = 4;
-const SYNC_BULK_MAX_MS = 12;
+const MB = 1024 * 1024;
+/**
+ * Per-frame upload budgets (results applied, ms spent applying, bytes handed to the GPU), by tier:
+ * 0 = normal play (keeps update() ≤ ~2 ms), 1 = a large backlog during play, 2 = bulk rebuild
+ * (rebuildAll(), which runs behind the loading overlay and should finish fast).
+ */
+const UPLOAD_MAX_RESULTS: readonly number[] = [24, 64, 256];
+const UPLOAD_MAX_MS: readonly number[] = [2, 5, 14];
+const UPLOAD_MAX_BYTES: readonly number[] = [4 * MB, 16 * MB, 64 * MB];
+/** Backlog (pending + in flight + unapplied chunks) above which tier 1 applies during play. */
+const LARGE_BACKLOG = 96;
+/** Main-thread fallback meshing budget per frame, by the same tiers. */
+const SYNC_MAX_MS: readonly number[] = [4, 6, 16];
 
 interface WorkerSlot {
   readonly index: number;
   worker: Worker | null;
   alive: boolean;
   inFlight: number;
-  /** Consecutive timeouts without any answer in between. */
+  /** Timeout checks in a row in which this worker had overdue jobs (reset by any answer). */
   timeouts: number;
+  /** Scratch flag of checkTimeouts(). */
+  overdue: boolean;
   readonly onMessage: (ev: MessageEvent<WorkerResponse>) => void;
   readonly onError: (ev: ErrorEvent) => void;
   readonly onMessageError: (ev: MessageEvent) => void;
@@ -201,6 +220,7 @@ export class ChunkMeshManager implements IChunkMeshManager {
   private readonly pool: Uint8Array[] = [];
   private syncBuffer: Uint8Array | null = null;
   private lastTimeoutCheck = 0;
+  private lastUpdateAt = -1;
   private readonly warned = new Set<string>();
 
   constructor(deps: ChunkMeshManagerDeps) {
@@ -219,16 +239,32 @@ export class ChunkMeshManager implements IChunkMeshManager {
   update(camera: THREE.Camera, focus: THREE.Vector3): void {
     if (this.disposed) return;
     try {
+      // The clock is only read while there is work: an idle update allocates nothing. The frame
+      // budget counts from here, so intake + dispatch time is part of it.
+      let start = -1;
+      if (this.pendingCount > 0 || this.inFlight > 0 || this.readyCount > 0) {
+        start = performance.now();
+        if (this.inFlight > 0 && this.lastUpdateAt >= 0 && start - this.lastUpdateAt > RESUME_GAP_MS) {
+          this.restartJobClocks(start);
+        }
+      }
       this.intakeDirty();
       if (this.pendingCount > 0) {
+        if (start < 0) start = performance.now();
         this.updateView(camera, focus);
         this.rescorePending();
       }
-      const bulk = this.isBulk();
-      if (this.fallback) this.meshOnMainThread(bulk ? SYNC_BULK_MAX_MS : SYNC_MAX_MS);
-      else if (this.pendingCount > 0) this.dispatchJobs();
-      if (this.readyCount > 0) this.applyReady(bulk);
-      if (this.inFlight > 0) this.checkTimeouts();
+      const tier = this.budgetTier();
+      if (this.fallback) this.meshOnMainThread(SYNC_MAX_MS[tier]);
+      else if (this.pendingCount > 0) this.dispatchJobs(start + UPLOAD_MAX_MS[tier]);
+      if (this.readyCount > 0) this.applyReady(tier, start);
+      if (this.inFlight > 0) {
+        const now = performance.now();
+        this.checkTimeouts(now);
+        this.lastUpdateAt = now;
+      } else {
+        this.lastUpdateAt = -1;
+      }
       if (this.bulk && this.idle) this.bulk = false;
     } catch (err) {
       this.warnOnce('update', 'update() failed', err);
@@ -299,6 +335,7 @@ export class ChunkMeshManager implements IChunkMeshManager {
         alive: true,
         inFlight: 0,
         timeouts: 0,
+        overdue: false,
         onMessage: (ev) => this.onWorkerMessage(slot, ev),
         onError: (ev) => this.onWorkerError(slot, ev),
         onMessageError: () => this.warnOnce('messageerror', 'a mesher worker reply could not be deserialized'),
@@ -370,6 +407,7 @@ export class ChunkMeshManager implements IChunkMeshManager {
     if (this.disposed || !slot.alive) return;
     const msg = ev.data;
     if (!msg || typeof msg !== 'object') return;
+    slot.timeouts = 0; // any answer (even a stale one) proves the worker is alive
     this.releaseBuffer(msg.voxels);
     const key = msg.key;
     const current =
@@ -384,7 +422,6 @@ export class ChunkMeshManager implements IChunkMeshManager {
       this.workerOf[key] = -1;
       slot.inFlight = Math.max(0, slot.inFlight - 1);
       this.inFlight = Math.max(0, this.inFlight - 1);
-      slot.timeouts = 0;
       if (msg.type === 'result') {
         this.meshedTotal++;
         this.recordMs(msg.ms);
@@ -398,20 +435,39 @@ export class ChunkMeshManager implements IChunkMeshManager {
     if (this.pendingCount > 0) this.dispatchJobs();
   }
 
-  /** The live worker with the fewest jobs, if it has room. */
+  /**
+   * The live worker with the fewest jobs, if it has room. Suspect workers (overdue jobs, no answer
+   * since) only get jobs when no healthy worker is alive.
+   */
   private freeSlot(): WorkerSlot | null {
+    const slots = this.slots;
+    let healthy = false;
+    for (let i = 0; i < slots.length; i++) {
+      if (slots[i].alive && slots[i].timeouts === 0) {
+        healthy = true;
+        break;
+      }
+    }
     let best: WorkerSlot | null = null;
-    for (const slot of this.slots) {
+    for (let i = 0; i < slots.length; i++) {
+      const slot = slots[i];
       if (!slot.alive || slot.inFlight >= MAX_JOBS_PER_WORKER) continue;
+      if (healthy && slot.timeouts > 0) continue;
       if (!best || slot.inFlight < best.inFlight) best = slot;
     }
     return best;
   }
 
-  private dispatchJobs(): void {
+  /**
+   * Fills free worker slots with the best pending chunks. Past `deadline` (a performance.now()
+   * time) only workers with nothing in flight still get a job; the prefetched second jobs then
+   * wait for the next result or frame.
+   */
+  private dispatchJobs(deadline = Infinity): void {
     while (this.pendingCount > 0 && !this.fallback && !this.disposed) {
       const slot = this.freeSlot();
       if (!slot) return;
+      if (slot.inFlight > 0 && deadline !== Infinity && performance.now() >= deadline) return;
       const key = this.bestPending();
       if (key < 0) return;
       this.removePending(key);
@@ -455,10 +511,14 @@ export class ChunkMeshManager implements IChunkMeshManager {
     }
   }
 
-  private checkTimeouts(): void {
-    const now = performance.now();
+  /**
+   * Requeues jobs without an answer for JOB_TIMEOUT_MS. Each worker with overdue jobs counts one
+   * timeout per check; MAX_TIMEOUT_CHECKS in a row (no answer in between) terminate it.
+   */
+  private checkTimeouts(now: number): void {
     if (now - this.lastTimeoutCheck < TIMEOUT_CHECK_INTERVAL_MS) return;
     this.lastTimeoutCheck = now;
+    let any = false;
     for (let key = 0; key < CHUNK_COUNT; key++) {
       if (this.jobOf[key] === 0 || now - this.sentAt[key] < JOB_TIMEOUT_MS) continue;
       const slot = this.slots[this.workerOf[key]];
@@ -468,10 +528,25 @@ export class ChunkMeshManager implements IChunkMeshManager {
       this.addPending(key);
       if (slot) {
         slot.inFlight = Math.max(0, slot.inFlight - 1);
-        slot.timeouts++;
-        if (slot.alive && slot.timeouts >= 2) this.killWorker(slot, 'stopped responding');
+        slot.overdue = true;
+        any = true;
       }
     }
+    if (!any) return;
+    for (let i = 0; i < this.slots.length; i++) {
+      const slot = this.slots[i];
+      if (!slot.overdue) continue;
+      slot.overdue = false;
+      slot.timeouts++;
+      if (slot.timeouts >= MAX_TIMEOUT_CHECKS) this.killWorker(slot, 'stopped responding');
+      else if (slot.alive) this.warnOnce(`slow:${slot.index}`, `mesher worker ${slot.index} is not answering; its jobs were requeued`);
+    }
+    if (this.pendingCount > 0 && !this.fallback) this.dispatchJobs();
+  }
+
+  /** After a long gap between frames (hidden page, sleep, blocked main thread): restart job clocks. */
+  private restartJobClocks(now: number): void {
+    for (let key = 0; key < CHUNK_COUNT; key++) if (this.jobOf[key] !== 0 && this.sentAt[key] < now) this.sentAt[key] = now;
   }
 
   private onJobError(key: number, version: number, message: string): void {
@@ -485,11 +560,13 @@ export class ChunkMeshManager implements IChunkMeshManager {
 
   // ------------------------------------------------------------------ main-thread fallback
 
+  /** Meshes pending chunks synchronously (nearest first) until the time budget is spent. */
   private meshOnMainThread(budgetMs: number): void {
     const t0 = performance.now();
-    let n = 0;
+    let first = true;
     while (this.pendingCount > 0) {
-      if (n > 0 && performance.now() - t0 >= budgetMs) return;
+      if (!first && performance.now() - t0 >= budgetMs) return;
+      first = false;
       const key = this.bestPending();
       if (key < 0) return;
       this.removePending(key);
@@ -512,13 +589,11 @@ export class ChunkMeshManager implements IChunkMeshManager {
       try {
         mesh = greedyMesh(buf);
       } catch (err) {
-        n++;
         this.onJobError(key, version, errorMessage(err));
         continue;
       }
       this.recordMs(performance.now() - tm);
       this.meshedTotal++;
-      n++;
       this.appliedSeq[key] = ++this.seq;
       this.applyMesh(key, mesh);
     }
@@ -628,8 +703,10 @@ export class ChunkMeshManager implements IChunkMeshManager {
     return s;
   }
 
-  private isBulk(): boolean {
-    return this.bulk || this.pendingCount + this.inFlight + this.readyCount > BULK_BACKLOG;
+  /** Budget tier for this frame: 2 = bulk rebuild, 1 = large backlog, 0 = normal play. */
+  private budgetTier(): number {
+    if (this.bulk) return 2;
+    return this.pendingCount + this.inFlight + this.readyCount > LARGE_BACKLOG ? 1 : 0;
   }
 
   // ------------------------------------------------------------------ results → scene
@@ -649,11 +726,15 @@ export class ChunkMeshManager implements IChunkMeshManager {
     this.readyCount++;
   }
 
-  private applyReady(bulk: boolean): void {
-    const maxResults = bulk ? BULK_MAX_RESULTS : UPLOAD_MAX_RESULTS;
-    const maxMs = bulk ? BULK_MAX_MS : UPLOAD_MAX_MS;
-    const maxBytes = bulk ? BULK_MAX_BYTES : UPLOAD_MAX_BYTES;
-    const t0 = performance.now();
+  /**
+   * Applies finished results under the tier's budget. The time budget runs from `startedAt` (the
+   * start of this update(), or now when unknown); at least one result is applied per call.
+   */
+  private applyReady(tier: number, startedAt: number): void {
+    const maxResults = UPLOAD_MAX_RESULTS[tier];
+    const maxMs = UPLOAD_MAX_MS[tier];
+    const maxBytes = UPLOAD_MAX_BYTES[tier];
+    const t0 = startedAt >= 0 ? startedAt : performance.now();
     let applied = 0;
     let bytes = 0;
     while (this.readyCount > 0 && applied < maxResults) {

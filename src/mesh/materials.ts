@@ -35,9 +35,11 @@ import type { MeshBuffers } from './protocol';
 
 /**
  * Night glow multiplier of emissive blocks (lit windows, street lamps, signs, beacons): at
- * uNight = 1 the block shows its lit colour plus emissive × NIGHT_GLOW.
+ * uNight = 1 the block shows its lit colour plus emissive × NIGHT_GLOW. Tuned on a moonlit test
+ * street: 1.15 reads clearly and keeps warm windows golden (≥ 1.3 washes them out to cream, and
+ * large lit curtain walls turn flat white since there is no tone mapping).
  */
-export const NIGHT_GLOW = 1.3;
+export const NIGHT_GLOW = 1.15;
 
 /** Water opacity (the atmosphere module's ocean ring uses a similar colour, WATER = 0x3b8fd9). */
 export const WATER_OPACITY = 0.78;
@@ -183,7 +185,16 @@ export function createChunkMaterials(): ChunkMaterials {
   };
 }
 
-const CHUNK_BOX = new THREE.Box3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE));
+/**
+ * Chunk-local bounds shared by every chunk geometry: the chunk cube, padded for the in-plane growth
+ * of opaque quads (QUAD_EPSILON in the mesher + CRACK_GROW_PER_DEPTH × view depth in the shader,
+ * < 0.3 voxels at the far plane), so frustum culling never clips a grown edge.
+ */
+const BOUNDS_MARGIN = 0.5;
+const CHUNK_BOX = new THREE.Box3(
+  new THREE.Vector3(-BOUNDS_MARGIN, -BOUNDS_MARGIN, -BOUNDS_MARGIN),
+  new THREE.Vector3(CHUNK_SIZE + BOUNDS_MARGIN, CHUNK_SIZE + BOUNDS_MARGIN, CHUNK_SIZE + BOUNDS_MARGIN),
+);
 const CHUNK_SPHERE = CHUNK_BOX.getBoundingSphere(new THREE.Sphere());
 
 /**

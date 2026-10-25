@@ -38,7 +38,12 @@ import {
 } from '../types';
 import { B, type BlockId } from './blocks';
 import { DECOR_MAX_HEIGHT, decorKindName, writeDecor, type DecorKind } from './decor';
+import type { LatticeField } from './noise';
 import {
+  OFF_BED,
+  OFF_GRASS,
+  OFF_ROCK,
+  SURF_GRASS,
   SURF_HIGHGRASS,
   SURF_ROCK,
   SURF_SAND,
@@ -67,6 +72,8 @@ export class Terrain implements ITerrain {
   private readonly decorHash: Uint32Array;
   private readonly ground: Uint8Array;
   private readonly noise: TerrainNoise;
+  /** Forest density field of the layout (darker grass under forests). */
+  private readonly forest: LatticeField;
   private readonly layoutInfo: LayoutInfo;
   /** Cached per-column top blocks, 64 per tile (row-major x + 8*z), valid where topsReady = 1. */
   private readonly tops: Uint8Array;
@@ -87,14 +94,17 @@ export class Terrain implements ITerrain {
     this.surface = layout.surface;
     this.decor = layout.decor;
     this.decorHash = layout.decorHash;
+    this.forest = layout.forest;
     this.layoutInfo = layout.info;
     this.tops = new Uint8Array(n * n * L);
     this.topsReady = new Uint8Array(n * n);
+    // Representative ground block = the top block of the tile's centre column (whose forest
+    // sample is exactly the tile-centre value).
     this.ground = new Uint8Array(n * n);
+    const forestTiles = layout.forestTiles;
     for (let tz = 0; tz < n; tz++) {
-      for (let tx = 0; tx < n; tx++) {
-        const t = tz * n + tx;
-        this.ground[t] = this.columnTop(tx * T + (T >> 1), tz * T + (T >> 1), this.surface[t], this.height[t]);
+      for (let tx = 0, t = tz * n; tx < n; tx++, t++) {
+        this.ground[t] = this.columnTopAt(tx * T + (T >> 1), tz * T + (T >> 1), this.surface[t], this.height[t], forestTiles[t]);
       }
     }
     this.stamp = { sx: T, sy: 0, sz: T, data: this.buf };
@@ -222,34 +232,41 @@ export class Terrain implements ITerrain {
 
   /** Natural top block of voxel column (x, z) on a tile with surface `surf` and height h. */
   private columnTop(x: number, z: number, surf: number, h: number): BlockId {
+    // Forest density sampled at the column's low corner: the centre column of a tile samples the
+    // tile centre exactly.
+    const forest = surf === SURF_GRASS || surf === SURF_HIGHGRASS ? this.forest.at(x / T, z / T) : 0;
+    return this.columnTopAt(x, z, surf, h, forest);
+  }
+
+  /** columnTop with the column's forest density given. */
+  private columnTopAt(x: number, z: number, surf: number, h: number, forest: number): BlockId {
     const tn = this.noise;
     switch (surf) {
       case SURF_SAND:
         return B.SAND;
       case SURF_WATER: {
-        const v = tn.bed.fbm(x / 13, z / 13, 2);
+        const v = tn.column.fbm(x / 13 + OFF_BED, z / 13 - OFF_BED, 2);
         if (h >= WATER_LEVEL - 2) return v > 0.42 ? B.GRAVEL : B.SAND; // shallows: mostly sand
         return v > 0.18 ? B.GRAVEL : v < -0.3 ? B.CLAY : B.SAND;
       }
       case SURF_SNOW:
-        return tn.rock.fbm(x / 7, z / 7, 2) > 0.48 ? B.ROCK : B.SNOW;
+        return tn.column.fbm(x / 7 + OFF_ROCK, z / 7 - OFF_ROCK, 2) > 0.48 ? B.ROCK : B.SNOW;
       case SURF_ROCK: {
-        const v = tn.rock.fbm(x / 9, z / 9, 2);
+        const v = tn.column.fbm(x / 9 + OFF_ROCK, z / 9 - OFF_ROCK, 2);
         return v < -0.42 ? B.GRASS_DARK : v > 0.5 ? B.GRAVEL : B.ROCK;
       }
       case SURF_HIGHGRASS:
-        if (tn.rock.fbm(x / 9, z / 9, 2) > 0.12) return B.ROCK;
-        return this.grassShade(x, z, h);
+        if (tn.column.fbm(x / 9 + OFF_ROCK, z / 9 - OFF_ROCK, 2) > 0.12) return B.ROCK;
+        return this.grassShade(x, z, h, forest);
       default:
-        return this.grassShade(x, z, h);
+        return this.grassShade(x, z, h, forest);
     }
   }
 
-  /** Large low-frequency grass patches; darker under forests and with altitude. */
-  private grassShade(x: number, z: number, h: number): BlockId {
-    const tn = this.noise;
-    let g = 0.9 * tn.grass.fbm(x / 46, z / 46, 2);
-    g -= 0.85 * (tn.forestCheap(x / T, z / T) - 0.5);
+  /** Large low-frequency grass patches; darker under forests (density `forest`) and with altitude. */
+  private grassShade(x: number, z: number, h: number, forest: number): BlockId {
+    let g = 0.9 * this.noise.column.fbm(x / 46 + OFF_GRASS, z / 46 + OFF_GRASS, 2);
+    g -= 0.85 * (forest - 0.5);
     g -= (h - 12) * 0.03;
     return g < -0.3 ? B.GRASS_DARK : g > 0.36 ? B.GRASS_LIGHT : B.GRASS;
   }

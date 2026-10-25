@@ -206,34 +206,100 @@ export function warp2(nx: Simplex2, ny: Simplex2, x: number, y: number, freq: nu
 }
 
 /**
- * Fills out[z*n + x] (an n×n grid of cells) with a SMOOTH field f evaluated only on a coarse
- * lattice — every `step` cells, at cell centres (k*step + 0.5) — and bilinearly interpolated in
- * between. Much cheaper than evaluating low-frequency noise per cell, and still deterministic
- * (plain arithmetic). Returns `out`.
+ * A SMOOTH 2D field over an n×n grid of cells, evaluated only on a coarse lattice and bilinearly
+ * interpolated in between: lattice point (i, j) sits at continuous cell coordinates
+ * (i·step + 0.5, j·step + 0.5), i.e. on cell centres (cell k spans [k, k+1)). Far cheaper than
+ * evaluating low-frequency noise per cell (or per voxel), and still deterministic (plain
+ * arithmetic on float32 samples).
  */
-export function sampleSmoothField(n: number, step: number, out: Float32Array, f: (x: number, z: number) => number): Float32Array {
-  const m = Math.floor((n - 1) / step) + 2;
-  const lattice = new Float32Array(m * m);
-  for (let gz = 0; gz < m; gz++) {
-    for (let gx = 0; gx < m; gx++) lattice[gz * m + gx] = f(gx * step + 0.5, gz * step + 0.5);
-  }
-  const inv = 1 / step;
-  for (let z = 0; z < n; z++) {
-    const fz = z * inv;
-    const kz = Math.floor(fz);
-    const v = fz - kz;
-    const r0 = kz * m;
-    const r1 = r0 + m;
-    for (let x = 0; x < n; x++) {
-      const fx = x * inv;
-      const kx = Math.floor(fx);
-      const u = fx - kx;
-      const a = lattice[r0 + kx] + (lattice[r0 + kx + 1] - lattice[r0 + kx]) * u;
-      const b = lattice[r1 + kx] + (lattice[r1 + kx + 1] - lattice[r1 + kx]) * u;
-      out[z * n + x] = a + (b - a) * v;
+export class LatticeField {
+  /** Grid edge in cells. */
+  readonly n: number;
+  /** Lattice points per axis (covers cell centres 0.5 … n - 0.5). */
+  readonly m: number;
+  readonly step: number;
+  readonly data: Float32Array;
+  private readonly inv: number;
+
+  constructor(n: number, step: number, f: (x: number, z: number) => number) {
+    const s = step >= 1 ? Math.floor(step) : 1;
+    this.n = n >= 1 ? Math.floor(n) : 1;
+    const m = Math.floor((this.n - 1) / s) + 2;
+    this.m = m;
+    this.step = s;
+    this.inv = 1 / s;
+    this.data = new Float32Array(m * m);
+    for (let j = 0; j < m; j++) {
+      for (let i = 0; i < m; i++) this.data[j * m + i] = f(i * s + 0.5, j * s + 0.5);
     }
   }
-  return out;
+
+  /**
+   * Bilinear value at continuous cell coordinates (cell centre = k + 0.5), clamped to the lattice,
+   * rounded to float32 (exactly the values toCells() stores).
+   */
+  at(x: number, z: number): number {
+    const top = this.m - 1;
+    let u = (x - 0.5) * this.inv;
+    let v = (z - 0.5) * this.inv;
+    u = u > 0 ? (u < top ? u : top) : 0; // NaN → 0
+    v = v > 0 ? (v < top ? v : top) : 0;
+    let i = Math.floor(u);
+    let j = Math.floor(v);
+    if (i >= top) i = top - 1;
+    if (j >= top) j = top - 1;
+    const fu = u - i;
+    const fv = v - j;
+    const d = this.data;
+    const r0 = j * this.m + i;
+    const r1 = r0 + this.m;
+    const a = d[r0] + (d[r0 + 1] - d[r0]) * fu;
+    const b = d[r1] + (d[r1 + 1] - d[r1]) * fu;
+    return Math.fround(a + (b - a) * fv);
+  }
+
+  /**
+   * The field at every cell centre (row-major, index x + n·z): the values of at(x + 0.5, z + 0.5)
+   * (bit-identical for power-of-two steps), computed separably — each lattice row is interpolated
+   * along x once, then rows are blended along z. Writes into `out` when it is large enough.
+   */
+  toCells(out?: Float32Array): Float32Array {
+    const n = this.n;
+    const s = this.step;
+    const m = this.m;
+    const inv = this.inv;
+    const d = this.data;
+    const res = out !== undefined && out.length >= n * n ? out : new Float32Array(n * n);
+    // rows[j·n + x] = lattice row j interpolated at cell x (doubles, exactly as in at()).
+    const rows = new Float64Array(m * n);
+    for (let x = 0, i = 0, k = 0; x < n; x++) {
+      const fu = k * inv;
+      for (let j = 0, r = i, o = x; j < m; j++, r += m, o += n) rows[o] = d[r] + (d[r + 1] - d[r]) * fu;
+      if (++k === s) {
+        k = 0;
+        i++;
+      }
+    }
+    for (let z = 0, j = 0, k = 0; z < n; z++) {
+      const o = z * n;
+      const r0 = j * n;
+      if (k === 0) {
+        for (let x = 0; x < n; x++) res[o + x] = rows[r0 + x];
+      } else {
+        const fv = k * inv;
+        const r1 = r0 + n;
+        for (let x = 0; x < n; x++) {
+          const a = rows[r0 + x];
+          res[o + x] = a + (rows[r1 + x] - a) * fv;
+        }
+      }
+      if (++k === s) {
+        k = 0;
+        j++;
+      }
+    }
+    return res;
+  }
 }
 
 /** Hermite smoothstep of x between edge0 and edge1 (edge0 may exceed edge1 for a falling edge). */
