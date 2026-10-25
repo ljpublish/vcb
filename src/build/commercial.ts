@@ -17,13 +17,14 @@ import { B, type BlockId } from '../voxel/blocks';
 import { hash3, hashToUnit, type Rng } from '../core/rng';
 import { MAX_STRUCTURE_HEIGHT } from '../types';
 import type { BuildingSpec, LocalEmitter } from './buildingGen';
-import { StampBuilder } from './stamp';
+import type { StampBuilder } from './stamp';
+import { newLot } from './parts';
 
 /** Builds an Active commercial building authored with its front facing +Z (caller rotates). */
 export function generateCommercial(spec: BuildingSpec, rng: Rng, emitters: LocalEmitter[]): StampBuilder {
   const S = spec.size * 8;
   const seed = rng.nextU32();
-  const ctx: Ctx = { S, seed, rng, emitters, b: new StampBuilder(S, MAX_STRUCTURE_HEIGHT + 1, S) };
+  const ctx: Ctx = { S, seed, rng, emitters, b: newLot(spec) };
   if (spec.level === 1) {
     const v = spec.variant % 4;
     if (v === 0) cornerShop(ctx);
