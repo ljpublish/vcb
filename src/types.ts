@@ -104,6 +104,8 @@ export const TileKind = {
   Road: 1,
   Zoned: 2,
   Park: 3,
+  /** Footprint tile of a civic service building (see CivicBuilding). */
+  Civic: 4,
 } as const;
 export type TileKind = (typeof TileKind)[keyof typeof TileKind];
 
@@ -136,8 +138,63 @@ export const CONSTRUCTION_STAGES = 3;
 /** 0 = paused, 1 = normal, 2 = fast, 3 = ultra. */
 export type SimSpeed = 0 | 1 | 2 | 3;
 
-export type ToolId = 'select' | 'road' | 'zone_r' | 'zone_c' | 'zone_i' | 'park' | 'bulldoze';
-export const TOOL_IDS: readonly ToolId[] = ['select', 'road', 'zone_r', 'zone_c', 'zone_i', 'park', 'bulldoze'];
+/** Placeable civic service buildings (player-placed, not grown). Generators: src/build/civic/. */
+export type CivicKind = 'town_hall' | 'police' | 'fire' | 'school' | 'hospital';
+export const CIVIC_KINDS: readonly CivicKind[] = ['town_hall', 'police', 'fire', 'school', 'hospital'];
+/** One tool per civic kind, e.g. 'civic_police'. */
+export type CivicToolId = `civic_${CivicKind}`;
+
+export type ToolId = 'select' | 'road' | 'zone_r' | 'zone_c' | 'zone_i' | 'park' | 'bulldoze' | CivicToolId;
+export const TOOL_IDS: readonly ToolId[] = [
+  'select', 'road', 'zone_r', 'zone_c', 'zone_i', 'park', 'bulldoze',
+  'civic_town_hall', 'civic_police', 'civic_fire', 'civic_school', 'civic_hospital',
+];
+export function civicKindOfTool(tool: ToolId): CivicKind | null {
+  return tool.startsWith('civic_') ? (tool.slice(6) as CivicKind) : null;
+}
+
+export interface CivicDef {
+  label: string;
+  /** Footprint edge in tiles. Must match CIVIC_SIZE in src/build/civic. */
+  size: BuildingSize;
+  /** One-off $ when placed. */
+  cost: number;
+  /** Monthly $ upkeep (BudgetReport.serviceUpkeep). */
+  upkeep: number;
+  /** Coverage radius in tiles (Chebyshev distance from the footprint). 0 = citywide. */
+  radius: number;
+  /** Max number of this kind in a city (0 = unlimited). */
+  maxCount: number;
+}
+
+/**
+ * Civic placement rules (validated by the simulation): every footprint tile must be in bounds,
+ * dry land, Empty or decor-only, and the same terrain height; at least one footprint edge tile must be
+ * next to a road (the building faces that road). Placing it clears decor. Bulldozing any footprint
+ * tile removes the whole building (refund 0).
+ *
+ * Effects (applied by the simulation each tick; tuning may change but the meaning may not):
+ *  - town_hall: citywide; +happiness, +10% tax income. Max 1.
+ *  - police:    tiles in radius get +land value; without coverage, C/I buildings may abandon a bit more.
+ *  - fire:      tiles in radius get +land value; uncovered buildings have a small chance to abandon.
+ *  - school:    residential level 3 requires school coverage; +land value for R in radius.
+ *  - hospital:  residential level >= 2 needs hospital coverage once population > 2000; +happiness.
+ */
+export const CIVIC_SPECS: Readonly<Record<CivicKind, CivicDef>> = {
+  town_hall: { label: 'Town Hall', size: 2, cost: 3000, upkeep: 60, radius: 0, maxCount: 1 },
+  police: { label: 'Police Station', size: 1, cost: 1200, upkeep: 40, radius: 12, maxCount: 0 },
+  fire: { label: 'Fire Station', size: 1, cost: 1200, upkeep: 40, radius: 12, maxCount: 0 },
+  school: { label: 'School', size: 2, cost: 2000, upkeep: 50, radius: 14, maxCount: 0 },
+  hospital: { label: 'Hospital', size: 2, cost: 2500, upkeep: 70, radius: 16, maxCount: 0 },
+};
+
+/** Service coverage of a tile (or city average), each 0..1. */
+export interface ServiceCoverage {
+  police: number;
+  fire: number;
+  education: number;
+  health: number;
+}
 
 /** Data overlays drawn on top of the terrain by the input module. */
 export type OverlayMode = 'none' | 'landValue' | 'pollution' | 'roadAccess';
@@ -259,6 +316,8 @@ export const KEYMAP = {
   toolIndustrial: ['Digit5'],
   toolPark: ['Digit6'],
   toolBulldoze: ['Digit7', 'KeyB', 'Delete'],
+  /** Opens the civic menu / cycles the selected civic tool (handled by src/ui). */
+  toolCivic: ['Digit8'],
   // --- cancel drag / back to select (handled by src/input/toolController.ts) ---
   cancel: ['Escape'],
   // --- simulation speed (handled by src/ui) ---
@@ -312,6 +371,20 @@ export interface Building {
   builtDay: number;
 }
 
+/** A civic service building. Owned and mutated only by the simulation. Ids share the Building id space. */
+export interface CivicBuilding {
+  id: number;
+  kind: CivicKind;
+  /** Min-corner tile of the footprint; size = CIVIC_SPECS[kind].size. */
+  tx: number;
+  tz: number;
+  /** Direction the entrance faces (towards an adjacent road). */
+  facing: Dir;
+  /** uint32 seed for the procedural look. */
+  variant: number;
+  builtDay: number;
+}
+
 /** Everything about one tile, for tooltips / inspect panel. */
 export interface TileInfo {
   tx: number;
@@ -332,6 +405,9 @@ export interface TileInfo {
   /** 0..1 */
   pollution: number;
   building: Readonly<Building> | null;
+  civic: Readonly<CivicBuilding> | null;
+  /** Service coverage at this tile. */
+  coverage: ServiceCoverage;
 }
 
 export interface RCI {
@@ -351,6 +427,8 @@ export interface BudgetReport {
   other: number;
   roadUpkeep: number;
   parkUpkeep: number;
+  /** Civic building upkeep (sum of CIVIC_SPECS[kind].upkeep). */
+  serviceUpkeep: number;
   income: number;
   expenses: number;
   net: number;
@@ -385,6 +463,10 @@ export interface CityStats {
   pollutionAvg: number;
   /** Citizen approval 0..1. */
   happiness: number;
+  /** Number of civic buildings per kind. */
+  civics: Record<CivicKind, number>;
+  /** Average service coverage over residential tiles. */
+  coverage: ServiceCoverage;
   /** The last completed month. */
   lastMonth: BudgetReport;
   /** Running estimate for the current month (full-month projection). */
@@ -406,6 +488,8 @@ export type ToolAction =
   | { type: 'road'; tiles: TileCoord[] }
   | { type: 'zone'; zone: RCIZone; tiles: TileCoord[] }
   | { type: 'park'; tiles: TileCoord[] }
+  /** Places one civic building with its min corner at `origin`. Facing is chosen by the simulation. */
+  | { type: 'civic'; kind: CivicKind; origin: TileCoord }
   /** Removes roads, zones, parks, trees and whole buildings (any footprint tile removes the building). */
   | { type: 'bulldoze'; tiles: TileCoord[] };
 
@@ -454,6 +538,8 @@ export interface CitySnapshot {
   /** Per tile: flag bits (TILE_FLAG_*). */
   tileFlags: Uint8Array;
   buildings: Building[];
+  /** Civic buildings. Saves from before civics existed decode as []. */
+  civics: CivicBuilding[];
   history: HistorySample[];
   /** Simulation-private, JSON-safe extension data; round-tripped verbatim by persistence. */
   extra: Record<string, unknown>;
@@ -658,6 +744,10 @@ export interface CityReader {
   getBuilding(id: number): Readonly<Building> | undefined;
   getBuildingAt(tx: number, tz: number): Readonly<Building> | undefined;
   forEachBuilding(cb: (b: Readonly<Building>) => void): void;
+  /** Civic building occupying the tile (any footprint tile). */
+  getCivicAt(tx: number, tz: number): Readonly<CivicBuilding> | undefined;
+  forEachCivic(cb: (c: Readonly<CivicBuilding>) => void): void;
+  getCoverage(tx: number, tz: number): ServiceCoverage;
   /** 4-bit DIR_BIT mask of road neighbours if the tile is a road, else 0. */
   getRoadMask(tx: number, tz: number): number;
   /** Natural tree/decor still present (TILE_FLAG_DECOR). */
