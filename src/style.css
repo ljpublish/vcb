@@ -1,0 +1,90 @@
+/*
+ * Global base styles (integrator-owned, frozen).
+ * Module-specific styles live in their own files (e.g. src/ui/ui.css, imported by src/ui/gameUI.ts).
+ */
+:root {
+  --vcb-font: 'Inter', 'Segoe UI', system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif;
+  --vcb-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  --vcb-bg: #1b2433;
+  --vcb-panel: rgba(22, 28, 40, 0.86);
+  --vcb-panel-solid: #161c28;
+  --vcb-border: rgba(255, 255, 255, 0.12);
+  --vcb-text: #eef2f7;
+  --vcb-text-dim: #9aa6b8;
+  --vcb-accent: #ffb547;
+  --vcb-good: #5fd17a;
+  --vcb-bad: #ff5f5f;
+  --vcb-res: #55b04a;
+  --vcb-com: #3f86d1;
+  --vcb-ind: #d1a12e;
+  --vcb-radius: 10px;
+  --vcb-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--vcb-bg);
+  color: var(--vcb-text);
+  font-family: var(--vcb-font);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+#app {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+}
+
+#viewport {
+  position: absolute;
+  inset: 0;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  outline: none;
+}
+
+#viewport canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  outline: none;
+}
+
+/* UI overlay: transparent to the pointer; interactive children set pointer-events: auto. */
+#ui {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.vcb-fatal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  background: var(--vcb-bg);
+  color: var(--vcb-text);
+  font-size: 16px;
+  line-height: 1.5;
+  pointer-events: auto;
+  z-index: 1000;
+}

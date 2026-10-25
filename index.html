@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#1b2433" />
+    <title>Voxel City Builder</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='7' width='4' height='8' fill='%23e0a95a'/%3E%3Crect x='6' y='3' width='4' height='12' fill='%235b8fc2'/%3E%3Crect x='11' y='9' width='4' height='6' fill='%2368b04f'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- WebGL canvas is appended here by src/render/scene.ts -->
+      <div id="viewport"></div>
+      <!-- DOM UI overlay root, owned by src/ui/*. pointer-events: none on the root; interactive children opt in. -->
+      <div id="ui"></div>
+    </div>
+    <noscript>Voxel City Builder needs JavaScript and WebGL.</noscript>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
