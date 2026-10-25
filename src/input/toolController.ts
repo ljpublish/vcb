@@ -575,12 +575,11 @@ export class ToolController implements IToolController {
     colors.length = n;
     dims.length = n;
     const toolColor = TOOL_COLORS[this._tool];
-    // A civic action has no tile list: accept a per-footprint-tile array or a single overall flag.
-    const whole = action.type === 'civic' && preview.valid.length !== n;
+    // Civic: valid[] has one flag per footprint tile, row-major from the origin (= this.tiles order).
     const clipped = action.type === 'civic' && n !== CIVIC_SPECS[action.kind].size ** 2;
     if (clipped) this.hoverValid = false;
     for (let i = 0; i < n; i++) {
-      const ok = !clipped && (whole ? preview.validCount > 0 : preview.valid[i] === true);
+      const ok = !clipped && preview.valid[i] === true;
       if (!preview.affordable) {
         colors[i] = ok ? UNAFFORDABLE_COLOR : INVALID_COLOR;
         dims[i] = !ok;
