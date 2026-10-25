@@ -11,6 +11,7 @@ export function emptyBudget(): BudgetReport {
     other: 0,
     roadUpkeep: 0,
     parkUpkeep: 0,
+    serviceUpkeep: 0,
     income: 0,
     expenses: 0,
     net: 0,
@@ -38,6 +39,8 @@ export function emptyStats(money = START_MONEY): CityStats {
     landValueAvg: 0,
     pollutionAvg: 0,
     happiness: 0.5,
+    civics: { town_hall: 0, police: 0, fire: 0, school: 0, hospital: 0 },
+    coverage: { police: 0, fire: 0, education: 0, health: 0 },
     lastMonth: emptyBudget(),
     projected: emptyBudget(),
   };
