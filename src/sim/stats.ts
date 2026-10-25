@@ -2,7 +2,11 @@
  * MODULE: simulation — stats helpers (module-internal API; may change).
  * Owner: simulation agent.
  */
-import { START_MONEY, type BudgetReport, type CityStats } from '../types';
+import { START_MONEY, type BudgetReport, type CityStats, type ServiceCoverage } from '../types';
+
+export function emptyCoverage(): ServiceCoverage {
+  return { police: 0, fire: 0, education: 0, health: 0 };
+}
 
 /** An all-zero budget report. */
 export function emptyBudget(): BudgetReport {
@@ -11,6 +15,7 @@ export function emptyBudget(): BudgetReport {
     other: 0,
     roadUpkeep: 0,
     parkUpkeep: 0,
+    serviceUpkeep: 0,
     income: 0,
     expenses: 0,
     net: 0,
@@ -38,6 +43,8 @@ export function emptyStats(money = START_MONEY): CityStats {
     landValueAvg: 0,
     pollutionAvg: 0,
     happiness: 0.5,
+    civics: { town_hall: 0, police: 0, fire: 0, school: 0, hospital: 0 },
+    coverage: emptyCoverage(),
     lastMonth: emptyBudget(),
     projected: emptyBudget(),
   };
