@@ -8,6 +8,7 @@
  *  - orchestrate "new city" / "load" / "import" (terrain → sim → world → structures → meshes),
  *  - expose a debug handle on window.__vcb (see main.ts).
  */
+import { disposeAudio, getAudio } from './audio';
 import {
   AUTOSAVE_INTERVAL_MS,
   AUTOSAVE_SLOT,
@@ -157,6 +158,7 @@ export class Game implements IGameController {
     this.view = createSceneContext(opts.viewport);
     this.world = new VoxelWorld();
     this.meshes = new ChunkMeshManager({ world: this.world, parent: this.view.worldRoot });
+    getAudio().attach(this.bus);
     this.sim = new Simulation({ bus: this.bus, terrain: this.terrain });
     this.structures = new StructureSync({ world: this.world, terrain: this.terrain, city: this.sim, bus: this.bus });
     this.rig = new CameraRig({ camera: this.view.camera, dom: this.view.canvas, terrain: this.terrain });
@@ -226,6 +228,7 @@ export class Game implements IGameController {
   dispose(): void {
     this.running = false;
     this.saves.dispose();
+    disposeAudio();
     this.ui.dispose();
     this.fx.dispose();
     this.tools.dispose();
